@@ -74,6 +74,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -202,7 +203,7 @@ func parseFiles(dir string, filenames []string) ([]*ast.File, error) {
 	return files, nil
 }
 
-func parseDir(dir, exclude string) ([]*ast.File, error) {
+func parseDir(dir, exclude string, includeTestFiles bool) ([]*ast.File, error) {
 	ctxt := build.Default
 	pkginfo, err := ctxt.ImportDir(dir, 0)
 	if _, nogo := err.(*build.NoGoError); err != nil && !nogo {
@@ -214,7 +215,7 @@ func parseDir(dir, exclude string) ([]*ast.File, error) {
 	}
 
 	filenames := append(pkginfo.GoFiles, pkginfo.CgoFiles...)
-	if *testFiles {
+	if includeTestFiles {
 		filenames = append(filenames, pkginfo.TestGoFiles...)
 	}
 
@@ -234,7 +235,8 @@ func parseDir(dir, exclude string) ([]*ast.File, error) {
 func getAsYouTypeFiles() ([]*ast.File, error) {
 	dir := filepath.Dir(*origFilename)
 	base := filepath.Base(*origFilename)
-	baseFiles, err := parseDir(dir, base)
+	includeTestFiles := strings.HasSuffix(*origFilename, "_test.go")
+	baseFiles, err := parseDir(dir, base, includeTestFiles)
 	if err != nil {
 		return nil, err
 	}
@@ -263,7 +265,7 @@ func getPkgFiles(args []string) ([]*ast.File, error) {
 			return nil, err
 		}
 		if info.IsDir() {
-			return parseDir(path, "")
+			return parseDir(path, "", *testFiles)
 		}
 	}
 
