@@ -10,11 +10,12 @@ import (
 	"fmt"
 	"go/ast"
 	"go/build"
-	"go/parser"
 	"go/token"
-	"go/types"
 	"path/filepath"
 	"sync"
+
+	"github.com/adamfaulkner/gotype/parser"
+	"github.com/adamfaulkner/gotype/types"
 )
 
 // An Importer provides the context for importing packages from source code.

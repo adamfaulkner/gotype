@@ -2,6 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build ignore
+
+// Build this command explicitly: go build gotype.go
+
 /*
 The gotype command, like the front-end of a Go compiler, parses and
 type-checks a single Go package. Errors are reported if the analysis
@@ -22,6 +26,11 @@ Imports are processed by importing directly from the source of
 imported packages (default), or by importing from compiled and
 installed packages (by setting -c to the respective compiler).
 
+The -c flag must be set to a compiler ("gc", "gccgo") when type-
+checking packages containing imports with relative import paths
+(import "./mypkg") because the source importer cannot know which
+files to include for such packages.
+
 Usage:
 	gotype [flags] [path...]
 
@@ -34,6 +43,8 @@ The flags are:
 		report all errors (not just the first 10)
 	-v
 		verbose mode
+	-c
+		compiler used for installed packages (gc, gccgo, or source); default: source
 
 Flags controlling additional output:
 	-ast
@@ -53,6 +64,10 @@ To check an entire package including (in-package) tests in the directory dir and
 
 	gotype -t -v dir
 
+To check the external test package (if any) in the current directory, based on installed packages compiled with
+cmd/compile:
+
+	gotype -c=gc -x .
 
 To verify the output of a pipe:
 
@@ -62,22 +77,20 @@ To verify the output of a pipe:
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
 	"go/build"
+	"go/importer"
 	"go/parser"
 	"go/scanner"
 	"go/token"
+	"go/types"
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
-
-	"github.com/adamfaulkner/gotype/types"
 )
 
 var (
@@ -92,10 +105,6 @@ var (
 	printAST      = flag.Bool("ast", false, "print AST (forces -seq)")
 	printTrace    = flag.Bool("trace", false, "print parse trace (forces -seq)")
 	parseComments = flag.Bool("comments", false, "parse comments (ignored unless -ast or -trace is provided)")
-
-	// Support "as you type" typechecking with these flags.
-	modifiedFilename = flag.String("modifiedFilename", "", "Path to modified file for as-you-type checking.")
-	origFilename     = flag.String("origFilename", "", "Original path to file for as-you-type checking.")
 )
 
 var (
@@ -139,7 +148,13 @@ Otherwise, each path must be the filename of a Go file belonging
 to the same package.
 
 Imports are processed by importing directly from the source of
-imported packages.
+imported packages (default), or by importing from compiled and
+installed packages (by setting -c to the respective compiler).
+
+The -c flag must be set to a compiler ("gc", "gccgo") when type-
+checking packages containing imports with relative import paths
+(import "./mypkg") because the source importer cannot know which
+files to include for such packages.
 `
 
 func usage() {
@@ -204,7 +219,7 @@ func parseFiles(dir string, filenames []string) ([]*ast.File, error) {
 	return files, nil
 }
 
-func parseDir(dir, exclude string, includeTestFiles bool) ([]*ast.File, error) {
+func parseDir(dir string) ([]*ast.File, error) {
 	ctxt := build.Default
 	pkginfo, err := ctxt.ImportDir(dir, 0)
 	if _, nogo := err.(*build.NoGoError); err != nil && !nogo {
@@ -216,36 +231,10 @@ func parseDir(dir, exclude string, includeTestFiles bool) ([]*ast.File, error) {
 	}
 
 	filenames := append(pkginfo.GoFiles, pkginfo.CgoFiles...)
-	if includeTestFiles {
+	if *testFiles {
 		filenames = append(filenames, pkginfo.TestGoFiles...)
 	}
-
-	// Remove the excluded file.
-	for i, fn := range filenames {
-		if fn == exclude {
-			filenames = append(filenames[:i], filenames[i+1:]...)
-			break
-		}
-	}
 	return parseFiles(dir, filenames)
-}
-
-// Return the files to check as a package for "as you type" use cases in an
-// editor. This returns all of the files in the same directory as origFilename
-// except origFilename plus modifiedFilename.
-func getAsYouTypeFiles() ([]*ast.File, error) {
-	dir := filepath.Dir(*origFilename)
-	base := filepath.Base(*origFilename)
-	includeTestFiles := strings.HasSuffix(*origFilename, "_test.go")
-	baseFiles, err := parseDir(dir, base, includeTestFiles)
-	if err != nil {
-		return nil, err
-	}
-	modifiedFile, err := parse(*modifiedFilename, nil)
-	if err != nil {
-		return nil, err
-	}
-	return append(baseFiles, modifiedFile), nil
 }
 
 func getPkgFiles(args []string) ([]*ast.File, error) {
@@ -266,7 +255,7 @@ func getPkgFiles(args []string) ([]*ast.File, error) {
 			return nil, err
 		}
 		if info.IsDir() {
-			return parseDir(path, "", *testFiles)
+			return parseDir(path)
 		}
 	}
 
@@ -286,11 +275,8 @@ func checkPkgFiles(files []*ast.File) {
 			}
 			report(err)
 		},
-
-		// Changed because I want to use the srcimporter with go 1.8
-		Importer: New(&build.Default, fset, make(map[string]*types.Package)),
-		// Changed to work with go 1.8
-		Sizes: &types.StdSizes{8, 8},
+		Importer: importer.For(*compiler, nil),
+		Sizes:    types.SizesFor(build.Default.Compiler, build.Default.GOARCH),
 	}
 
 	defer func() {
@@ -329,19 +315,7 @@ func main() {
 
 	start := time.Now()
 
-	var files []*ast.File
-	var err error
-
-	if *modifiedFilename != "" || *origFilename != "" {
-		if *modifiedFilename == "" || *origFilename == "" {
-			report(errors.New("Both or neither modifiedFilename and origFilename must be specified."))
-			os.Exit(2)
-		}
-
-		files, err = getAsYouTypeFiles()
-	} else {
-		files, err = getPkgFiles(flag.Args())
-	}
+	files, err := getPkgFiles(flag.Args())
 	if err != nil {
 		report(err)
 		os.Exit(2)
