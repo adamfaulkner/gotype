@@ -1,6 +1,8 @@
 Hacked Together GoType
 =================
 
+I think this is deprecated now, and you should probably use [gopls](https://github.com/golang/tools/blob/master/gopls/README.md)
+
 What this is
 -----------
 
